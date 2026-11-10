@@ -8,11 +8,11 @@
 - Added 3 streak unit tests and 10 widget tests; all 13 pass, and `flutter analyze` is clean.
 - Built refreshed debug APK, release APK, and release AAB after reliability/layout changes; APK signatures and AAB archive/signature validate.
 - Wrote build instructions and the Figma-flow/test report.
-- Pushed the V1 source, Android scaffolding, tests, and docs to GitHub `main` in commit `447a6c4`.
+- Pushed the V1 source, Android scaffolding, tests, and docs to GitHub `main`; the latest reliability/layout update is commit `30702b6`.
 
 ## Remaining / handoff
 
 - User will install `sloth-v1-debug.apk` and perform the emulator/device smoke test.
 - Release APK/AAB use the debug key. Configure a private production upload key before Play submission.
 - APK/AAB binaries are delivered separately in the workspace outputs; they are not committed to Git history.
-- Latest reliability/layout changes passed tests and have been rebuilt; they are ready to push as a follow-up commit.
+- Latest reliability/layout changes passed tests and have been rebuilt and pushed.
