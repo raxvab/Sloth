@@ -1,44 +1,60 @@
 # Sloth — Flutter Android V1
 
-Sloth is a quiet, single-habit accountability app. It stores the user's daily habit question and streak locally on the device.
+**Slow down. Do one thing. Keep going.**
 
-## V1 journey
+Sloth is a calm, single-habit accountability app. Choose one daily question, record whether you completed or skipped it, and keep a local streak. It follows the supplied Cupertino-style Sloth screen and runs offline.
 
-1. First launch opens **Welcome to Sloth**. The user can change the suggested one-thing question and tap **Start**.
-2. The home screen shows that question in the ring and the current day streak.
-3. Tapping the ring completes today's habit, animates the ring to green, shows a check badge, and saves the completion date and streak.
-4. The top-left control opens **Edit Question**. Save persists the change; Cancel leaves it unchanged.
-5. The top-right control asks before resetting. Confirm clears local Sloth data and returns to onboarding.
+## V1 experience
 
-The supplied archive contained only `pubspec.yaml`, `README.md`, and `lib/main.dart`; it did not include Figma exports, image assets, or Android scaffolding. The current UI preserves the supplied app's Cupertino style, palette, ring, streak, edit and reset concepts. The launcher icon is a simple native vector mark because no source logo was provided.
+- First launch asks for one habit question. The 64-character field starts with “Did I walk today?” and can be changed before starting.
+- The home screen shows a time-based greeting, today’s date, the question in a large circular control, and the active streak.
+- Tap the circle to complete today. It fills with muted sage, animates a white checkmark, gives haptic feedback, and saves the completion date and streak.
+- Use **Skip today** to record a skip in coral with an X. The skip persists across restarts; it can be undone or replaced with a completion later that day.
+- Long-press the circle or use the top-left control to edit the question. The top-right control confirms before clearing local data.
+- The Sloth launcher mark is a native vector drawing of a sloth hanging from a branch.
 
-## Local development
+## Data and privacy
 
-Requirements: Flutter 3.47.9 stable, Android SDK platform 35 or newer, Android build tools, and Java 17 or newer.
+The question, completion date, skip date, and streak are stored locally with `shared_preferences`. The release manifest has no Internet permission and the app makes no network calls. There is no account, cloud sync, multi-device restore, reminder service, or server-side authentication.
+
+## Requirements
+
+- Flutter 3.47.9 stable / Dart 3.13.7 (or a compatible later stable release)
+- Android SDK 36 and Java 17 or newer
+- Android API 24 or newer
+
+## Run and verify
+
+From the project root:
 
 ```sh
 flutter pub get
-flutter test
 flutter analyze
+flutter test
 flutter run
 ```
 
-## Android builds
+The widget suite checks onboarding, the complete primary journey, persistence, skip and completion states, editing, reset confirmation, lifecycle refresh, accessibility actions, keyboard handling, and narrow, standard, and wide layouts.
+
+## Build and install Android
 
 ```sh
 flutter build apk --debug
 flutter build apk --release
 flutter build appbundle --release
+adb install -r build/app/outputs/flutter-apk/app-debug.apk
 ```
 
-Outputs are written under `build/app/outputs/`. The local release APK and AAB currently use Flutter's debug signing config for local testing. They are not signed with a production Google Play upload key.
+Build outputs are written under `build/app/outputs/`. Refreshed V1 APKs and the AAB are delivered in the workspace `outputs/` directory. `docs/v1-test-run.md` records the executed tests, build validation, feature inventory, smoke-test handoff, and Play checklist.
+
+The release APK and AAB currently use Flutter’s debug signing configuration for local testing. They are **not** signed with a production Google Play upload key.
 
 ### Configure a production signing key
 
 1. Generate a private upload key with `keytool` and keep the keystore outside version control.
-2. Store its path and passwords in `android/key.properties` (never commit that file or the keystore).
-3. Replace the `signingConfigs.debug` reference in `android/app/build.gradle.kts` with a release signing config that reads `key.properties`.
-4. Build a new release AAB and retain secure backups of the upload key and credentials.
-5. Register the package `com.whyybhav.sloth` in Play Console and configure Play App Signing before uploading.
+2. Store its path and passwords in local `android/key.properties`; never commit that file or the keystore.
+3. Replace `signingConfigs.debug` in `android/app/build.gradle.kts` with a release signing config that reads `key.properties`.
+4. Build and validate a new release AAB; securely back up the upload key and credentials.
+5. Register `com.whyybhav.sloth` in Play Console and configure Play App Signing.
 
-See `docs/v1-test-run.md` for the executed test list, build artifact validation, V1 feature inventory, and known limitations. See `docs/progress.md` for current release progress and handoff items.
+See `docs/progress.md` for the current handoff and `docs/v1-test-run.md` for known limitations and release preparation.

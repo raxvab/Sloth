@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'date_labels.dart';
 import 'streak.dart';
 
 void main() => runApp(const SlothApp());
@@ -163,6 +165,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     placeholder: 'Did I call my mom today?',
                     padding: const EdgeInsets.all(16),
                     enabled: !saving,
+                    inputFormatters: [LengthLimitingTextInputFormatter(64)],
                   ),
                   if (saveError != null) ...[
                     const SizedBox(height: 12),
@@ -197,17 +200,21 @@ class HabitScreen extends StatefulWidget {
 }
 
 class _HabitScreenState extends State<HabitScreen>
-    with SingleTickerProviderStateMixin {
-  static const Color defaultColor = Color(0xFFFFD60A);
-  static const Color completedColor = Color(0xFF34C759);
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
+  static const Color defaultColor = Color(0xFFF0B94B);
+  static const Color completedColor = Color(0xFFA8C3A0);
+  static const Color skippedColor = Color(0xFFD89085);
 
   String question = 'Did I walk today?';
   bool completed = false;
+  bool skipped = false;
   bool completing = false;
+  bool skipping = false;
   bool loading = true;
   String? loadError;
   int streak = 0;
   String lastDate = '';
+  Timer? dayBoundaryTimer;
 
   late final AnimationController controller = AnimationController(
       vsync: this, duration: const Duration(milliseconds: 350))
@@ -216,11 +223,41 @@ class _HabitScreenState extends State<HabitScreen>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _load();
+    _scheduleNextDayRefresh();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _load();
+      _scheduleNextDayRefresh();
+    } else {
+      dayBoundaryTimer?.cancel();
+    }
+  }
+
+  void _scheduleNextDayRefresh() {
+    dayBoundaryTimer?.cancel();
+    final now = DateTime.now();
+    final nextDay = DateTime(now.year, now.month, now.day + 1);
+    dayBoundaryTimer = Timer(nextDay.difference(now), () {
+      if (!mounted) return;
+      _load();
+      _scheduleNextDayRefresh();
+    });
   }
 
   String today() {
     return dateKey(DateTime.now());
+  }
+
+  int get visibleStreak {
+    if (completed) return streak;
+    if (skipped) return 0;
+    final yesterday = dateKey(DateTime.now().subtract(const Duration(days: 1)));
+    return lastDate == yesterday ? streak : 0;
   }
 
   Future<void> _load() async {
@@ -231,11 +268,23 @@ class _HabitScreenState extends State<HabitScreen>
     try {
       final prefs = await SharedPreferences.getInstance();
       if (!mounted) return;
+      final progress = CompletionRecord.fromStored(
+        json: prefs.getString('completionRecord'),
+        legacyStreak: prefs.getInt('streak') ?? 0,
+        legacyLastCompletedDate: prefs.getString('lastCompletedDate') ?? '',
+      );
+      final loadedSkippedDate = prefs.getString('lastSkippedDate') ?? '';
+      final status = dailyHabitStatus(
+        lastCompletedDate: progress.lastCompletedDate,
+        lastSkippedDate: loadedSkippedDate,
+        today: DateTime.now(),
+      );
       setState(() {
         question = prefs.getString('question') ?? question;
-        streak = prefs.getInt('streak') ?? 0;
-        lastDate = prefs.getString('lastCompletedDate') ?? '';
-        completed = lastDate == today();
+        streak = progress.streak;
+        lastDate = progress.lastCompletedDate;
+        completed = status == DailyHabitStatus.completed;
+        skipped = status == DailyHabitStatus.skipped;
         loading = false;
       });
     } catch (_) {
@@ -252,20 +301,26 @@ class _HabitScreenState extends State<HabitScreen>
     setState(() => completing = true);
     try {
       HapticFeedback.mediumImpact();
-      await controller.forward(from: 0.92);
-      final completionDate = today();
+      unawaited(controller.forward(from: 0.92));
+      final now = DateTime.now();
+      final completionDate = dateKey(now);
       final nextStreak = streakAfterCompletion(
         currentStreak: streak,
         lastCompletedDate: lastDate,
-        today: DateTime.now(),
+        today: now,
       );
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('question', question);
-      await prefs.setInt('streak', nextStreak);
-      await prefs.setString('lastCompletedDate', completionDate);
+      await prefs.setString(
+        'completionRecord',
+        CompletionRecord(
+          streak: nextStreak,
+          lastCompletedDate: completionDate,
+        ).toJson(),
+      );
       if (!mounted) return;
       setState(() {
         completed = true;
+        skipped = false;
         streak = nextStreak;
         lastDate = completionDate;
         completing = false;
@@ -274,6 +329,46 @@ class _HabitScreenState extends State<HabitScreen>
       if (!mounted) return;
       setState(() => completing = false);
       await _showError('Could not save today’s completion. Please try again.');
+    }
+  }
+
+  Future<void> _skipToday() async {
+    if (completed || skipped || skipping || loading || loadError != null) {
+      return;
+    }
+    setState(() => skipping = true);
+    try {
+      final skippedOn = today();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('lastSkippedDate', skippedOn);
+      if (!mounted) return;
+      HapticFeedback.selectionClick();
+      setState(() {
+        skipped = true;
+        skipping = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => skipping = false);
+      await _showError('Could not save today’s skip. Please try again.');
+    }
+  }
+
+  Future<void> _undoSkip() async {
+    if (!skipped || skipping || loading || loadError != null) return;
+    setState(() => skipping = true);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('lastSkippedDate');
+      if (!mounted) return;
+      setState(() {
+        skipped = false;
+        skipping = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => skipping = false);
+      await _showError('Could not undo today’s skip. Please try again.');
     }
   }
 
@@ -320,6 +415,16 @@ class _HabitScreenState extends State<HabitScreen>
                   controller: textController,
                   padding: const EdgeInsets.all(12),
                   enabled: !savingQuestion,
+                  inputFormatters: [LengthLimitingTextInputFormatter(64)],
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Examples: “Did I call my mom today?” or “Did I avoid sugar today?”',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF6E6E73),
+                  ),
                 ),
                 if (editError != null) ...[
                   const SizedBox(height: 8),
@@ -407,8 +512,25 @@ class _HabitScreenState extends State<HabitScreen>
   }
 
   @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    dayBoundaryTimer?.cancel();
+    controller.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final ringColor = completed ? completedColor : defaultColor;
+    final ringColor = completed
+        ? completedColor
+        : skipped
+            ? skippedColor
+            : defaultColor;
+    final ringFill = completed
+        ? completedColor
+        : skipped
+            ? skippedColor
+            : CupertinoColors.white;
 
     if (loading) {
       return const CupertinoPageScaffold(
@@ -444,15 +566,23 @@ class _HabitScreenState extends State<HabitScreen>
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  CupertinoButton(
-                    padding: const EdgeInsets.all(8),
-                    onPressed: _editQuestion,
-                    child: const Icon(CupertinoIcons.back),
+                  Semantics(
+                    button: true,
+                    label: 'Edit habit question',
+                    child: CupertinoButton(
+                      padding: const EdgeInsets.all(8),
+                      onPressed: _editQuestion,
+                      child: const Icon(CupertinoIcons.back),
+                    ),
                   ),
-                  CupertinoButton(
-                    padding: const EdgeInsets.all(8),
-                    onPressed: _logout,
-                    child: const Icon(CupertinoIcons.square_arrow_right),
+                  Semantics(
+                    button: true,
+                    label: 'Reset Sloth',
+                    child: CupertinoButton(
+                      padding: const EdgeInsets.all(8),
+                      onPressed: _logout,
+                      child: const Icon(CupertinoIcons.square_arrow_right),
+                    ),
                   ),
                 ],
               ),
@@ -461,16 +591,12 @@ class _HabitScreenState extends State<HabitScreen>
               child: LayoutBuilder(
                 builder: (context, constraints) {
                   final ringSize = math.min(
-                    290.0,
-                    math.max(160.0, constraints.maxHeight - 135),
+                    286.0,
+                    math.min(
+                      math.max(152.0, (constraints.maxWidth - 32) * 0.72),
+                      math.max(152.0, constraints.maxHeight - 220),
+                    ),
                   );
-                  final ringGap = ringSize >= 280
-                      ? 60.0
-                      : math.max(
-                          16.0,
-                          math.min(
-                              36.0, constraints.maxHeight - ringSize - 100),
-                        );
                   return SingleChildScrollView(
                     child: ConstrainedBox(
                       constraints:
@@ -478,69 +604,144 @@ class _HabitScreenState extends State<HabitScreen>
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          ScaleTransition(
-                            scale: CurvedAnimation(
-                              parent: controller,
-                              curve: Curves.easeOutBack,
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(8, 12, 8, 22),
+                            child: Column(
+                              children: [
+                                Text(
+                                  '${greetingFor(DateTime.now())}, Vaibhav',
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                    fontSize: 17,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF1C1C1E),
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  friendlyDate(DateTime.now()),
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    color: Color(0xFF6E6E73),
+                                  ),
+                                ),
+                              ],
                             ),
-                            child: Semantics(
-                              button: true,
-                              enabled: !completed && !completing,
-                              label: completed
-                                  ? 'Habit completed today'
-                                  : completing
-                                      ? 'Saving habit completion'
-                                      : 'Complete habit',
-                              child: GestureDetector(
-                                behavior: HitTestBehavior.opaque,
-                                onTap: completed || completing
-                                    ? null
-                                    : _markCompleted,
-                                child: SizedBox(
+                          ),
+                          Semantics(
+                            button: true,
+                            enabled: !completing && !skipping,
+                            label: completed
+                                ? '$question. Completed today.'
+                                : skipped
+                                    ? '$question. Skipped today.'
+                                    : completing
+                                        ? '$question. Saving completion.'
+                                        : question,
+                            hint:
+                                'Tap to mark this habit complete. Long press to edit the question.',
+                            onTap: completed ? null : _markCompleted,
+                            onLongPress: _editQuestion,
+                            excludeSemantics: true,
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              excludeFromSemantics: true,
+                              onTap: completed || completing || skipping
+                                  ? null
+                                  : _markCompleted,
+                              onLongPress: _editQuestion,
+                              child: ScaleTransition(
+                                scale: CurvedAnimation(
+                                  parent: controller,
+                                  curve: Curves.easeOutBack,
+                                ),
+                                child: AnimatedContainer(
+                                  duration: const Duration(milliseconds: 450),
+                                  curve: Curves.easeInOutCubic,
                                   width: ringSize,
                                   height: ringSize,
+                                  decoration: BoxDecoration(
+                                    color: ringFill,
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                      color: ringColor,
+                                      width: 16,
+                                    ),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color:
+                                            ringColor.withValues(alpha: 0.22),
+                                        blurRadius: 30,
+                                        spreadRadius: 2,
+                                      ),
+                                    ],
+                                  ),
                                   child: Stack(
                                     alignment: Alignment.center,
                                     children: [
-                                      CustomPaint(
-                                        size: Size(ringSize, ringSize),
-                                        painter: RingPainter(color: ringColor),
-                                      ),
                                       Padding(
-                                        padding: EdgeInsets.symmetric(
-                                          horizontal: ringSize * 0.19,
+                                        padding: EdgeInsets.fromLTRB(
+                                          ringSize * 0.18,
+                                          ringSize * 0.18,
+                                          ringSize * 0.18,
+                                          ringSize * 0.28,
                                         ),
                                         child: Text(
                                           question,
                                           textAlign: TextAlign.center,
+                                          maxLines: 5,
+                                          overflow: TextOverflow.ellipsis,
                                           style: TextStyle(
                                             fontSize: math.max(
                                               16.0,
                                               math.min(24.0, ringSize * 0.082),
                                             ),
+                                            height: 1.2,
                                             fontWeight: FontWeight.w700,
+                                            color: completed || skipped
+                                                ? CupertinoColors.white
+                                                : const Color(0xFF1C1C1E),
                                           ),
                                         ),
                                       ),
-                                      if (completed)
+                                      if (completing ||
+                                          skipping ||
+                                          completed ||
+                                          skipped)
                                         Positioned(
                                           bottom: ringSize * 0.1,
-                                          child: Container(
-                                            width: ringSize * 0.18,
-                                            height: ringSize * 0.18,
-                                            decoration: BoxDecoration(
-                                              color: completedColor,
-                                              shape: BoxShape.circle,
-                                              border: Border.all(
-                                                color: CupertinoColors.white,
-                                                width: 4,
-                                              ),
+                                          child: AnimatedSwitcher(
+                                            duration: const Duration(
+                                                milliseconds: 220),
+                                            transitionBuilder:
+                                                (child, animation) =>
+                                                    ScaleTransition(
+                                              scale: animation,
+                                              child: child,
                                             ),
-                                            child: Icon(
-                                              CupertinoIcons.check_mark,
-                                              color: CupertinoColors.white,
-                                              size: ringSize * 0.09,
-                                            ),
+                                            child: completing || skipping
+                                                ? CupertinoActivityIndicator(
+                                                    key: const ValueKey(
+                                                        'saving'),
+                                                    color: completed || skipped
+                                                        ? CupertinoColors.white
+                                                        : const Color(
+                                                            0xFF6E6E73),
+                                                  )
+                                                : Icon(
+                                                    skipped
+                                                        ? CupertinoIcons.xmark
+                                                        : CupertinoIcons
+                                                            .check_mark,
+                                                    key: ValueKey(
+                                                      skipped
+                                                          ? 'skipped'
+                                                          : 'done',
+                                                    ),
+                                                    color:
+                                                        CupertinoColors.white,
+                                                    size: ringSize * 0.1,
+                                                  ),
                                           ),
                                         ),
                                     ],
@@ -549,21 +750,58 @@ class _HabitScreenState extends State<HabitScreen>
                               ),
                             ),
                           ),
-                          SizedBox(height: ringGap),
+                          SizedBox(height: ringSize >= 250 ? 28 : 14),
                           Text(
-                            '$streak',
+                            '$visibleStreak',
                             style: TextStyle(
                               fontSize: math.min(56.0, ringSize * 0.193),
                               fontWeight: FontWeight.bold,
-                              color: completed
-                                  ? completedColor
-                                  : CupertinoColors.black,
+                              color: completed || skipped
+                                  ? ringColor
+                                  : const Color(0xFF1C1C1E),
                             ),
                           ),
                           Text(
                             'day streak',
                             style: TextStyle(
                               fontSize: math.min(24.0, ringSize * 0.083),
+                              color: const Color(0xFF6E6E73),
+                            ),
+                          ),
+                          if (!completed)
+                            CupertinoButton(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 6,
+                              ),
+                              onPressed: skipping
+                                  ? null
+                                  : skipped
+                                      ? _undoSkip
+                                      : _skipToday,
+                              child: Text(
+                                skipping
+                                    ? 'Saving…'
+                                    : skipped
+                                        ? 'Undo skip'
+                                        : 'Skip today',
+                                style: const TextStyle(
+                                  fontSize: 14,
+                                  color: Color(0xFF6E6E73),
+                                ),
+                              ),
+                            ),
+                          const Padding(
+                            padding: EdgeInsets.only(top: 2, bottom: 14),
+                            child: Text(
+                              'SLOW DOWN. DO ONE THING. KEEP GOING.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: 10,
+                                letterSpacing: 1.1,
+                                fontWeight: FontWeight.w600,
+                                color: Color(0xFF6E6E73),
+                              ),
                             ),
                           ),
                         ],
@@ -578,26 +816,4 @@ class _HabitScreenState extends State<HabitScreen>
       ),
     );
   }
-}
-
-class RingPainter extends CustomPainter {
-  final Color color;
-  RingPainter({required this.color});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = size.center(Offset.zero);
-    const strokeWidth = 18.0;
-    final radius = math.min(size.width, size.height) / 2 - strokeWidth;
-    final paint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = strokeWidth
-      ..strokeCap = StrokeCap.round
-      ..color = color;
-    canvas.drawCircle(center, radius, paint);
-  }
-
-  @override
-  bool shouldRepaint(covariant RingPainter oldDelegate) =>
-      oldDelegate.color != color;
 }
