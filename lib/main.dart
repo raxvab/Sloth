@@ -32,6 +32,7 @@ class RootScreen extends StatefulWidget {
 class _RootScreenState extends State<RootScreen> {
   bool loaded = false;
   bool onboarded = false;
+  String? loadError;
 
   @override
   void initState() {
@@ -40,9 +41,24 @@ class _RootScreenState extends State<RootScreen> {
   }
 
   Future<void> _load() async {
-    final prefs = await SharedPreferences.getInstance();
-    onboarded = prefs.getBool('onboarded') ?? false;
-    setState(() => loaded = true);
+    setState(() {
+      loaded = false;
+      loadError = null;
+    });
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (!mounted) return;
+      setState(() {
+        onboarded = prefs.getBool('onboarded') ?? false;
+        loaded = true;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        loaded = true;
+        loadError = 'Sloth could not load your saved data.';
+      });
+    }
   }
 
   @override
@@ -50,6 +66,25 @@ class _RootScreenState extends State<RootScreen> {
     if (!loaded) {
       return const CupertinoPageScaffold(
         child: Center(child: CupertinoActivityIndicator()),
+      );
+    }
+    if (loadError case final error?) {
+      return CupertinoPageScaffold(
+        child: SafeArea(
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(error, textAlign: TextAlign.center),
+                const SizedBox(height: 16),
+                CupertinoButton.filled(
+                  onPressed: _load,
+                  child: const Text('Try again'),
+                ),
+              ],
+            ),
+          ),
+        ),
       );
     }
     return onboarded ? const HabitScreen() : const OnboardingScreen();
@@ -65,19 +100,33 @@ class OnboardingScreen extends StatefulWidget {
 
 class _OnboardingScreenState extends State<OnboardingScreen> {
   final controller = TextEditingController(text: 'Did I walk today?');
+  bool saving = false;
+  String? saveError;
 
   Future<void> _continue() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-        'question',
-        controller.text.trim().isEmpty
-            ? 'Did I walk today?'
-            : controller.text.trim());
-    await prefs.setBool('onboarded', true);
-    if (mounted) {
+    if (saving) return;
+    setState(() {
+      saving = true;
+      saveError = null;
+    });
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+          'question',
+          controller.text.trim().isEmpty
+              ? 'Did I walk today?'
+              : controller.text.trim());
+      await prefs.setBool('onboarded', true);
+      if (!mounted) return;
       Navigator.of(context).pushReplacement(
         CupertinoPageRoute(builder: (_) => const HabitScreen()),
       );
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        saving = false;
+        saveError = 'Could not save your habit. Please try again.';
+      });
     }
   }
 
@@ -113,11 +162,22 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     controller: controller,
                     placeholder: 'Did I call my mom today?',
                     padding: const EdgeInsets.all(16),
+                    enabled: !saving,
                   ),
+                  if (saveError != null) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      saveError!,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: CupertinoColors.systemRed),
+                    ),
+                  ],
                   const SizedBox(height: 24),
                   CupertinoButton.filled(
-                    onPressed: _continue,
-                    child: const Text('Start'),
+                    onPressed: saving ? null : _continue,
+                    child: saving
+                        ? const CupertinoActivityIndicator()
+                        : const Text('Start'),
                   ),
                 ],
               ),
@@ -143,6 +203,9 @@ class _HabitScreenState extends State<HabitScreen>
 
   String question = 'Did I walk today?';
   bool completed = false;
+  bool completing = false;
+  bool loading = true;
+  String? loadError;
   int streak = 0;
   String lastDate = '';
 
@@ -161,69 +224,130 @@ class _HabitScreenState extends State<HabitScreen>
   }
 
   Future<void> _load() async {
-    final prefs = await SharedPreferences.getInstance();
-    if (!mounted) return;
     setState(() {
-      question = prefs.getString('question') ?? question;
-      streak = prefs.getInt('streak') ?? 0;
-      lastDate = prefs.getString('lastCompletedDate') ?? '';
-      completed = lastDate == today();
+      loading = true;
+      loadError = null;
     });
-  }
-
-  Future<void> _save() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('question', question);
-    await prefs.setInt('streak', streak);
-    await prefs.setString('lastCompletedDate', lastDate);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (!mounted) return;
+      setState(() {
+        question = prefs.getString('question') ?? question;
+        streak = prefs.getInt('streak') ?? 0;
+        lastDate = prefs.getString('lastCompletedDate') ?? '';
+        completed = lastDate == today();
+        loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        loading = false;
+        loadError = 'Sloth could not load your saved habit.';
+      });
+    }
   }
 
   Future<void> _markCompleted() async {
-    if (completed) return;
-    HapticFeedback.mediumImpact();
-    await controller.forward(from: 0.92);
-    if (!mounted) return;
-    setState(() {
-      completed = true;
-      streak = streakAfterCompletion(
+    if (completed || completing || loading || loadError != null) return;
+    setState(() => completing = true);
+    try {
+      HapticFeedback.mediumImpact();
+      await controller.forward(from: 0.92);
+      final completionDate = today();
+      final nextStreak = streakAfterCompletion(
         currentStreak: streak,
         lastCompletedDate: lastDate,
         today: DateTime.now(),
       );
-      lastDate = today();
-    });
-    await _save();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('question', question);
+      await prefs.setInt('streak', nextStreak);
+      await prefs.setString('lastCompletedDate', completionDate);
+      if (!mounted) return;
+      setState(() {
+        completed = true;
+        streak = nextStreak;
+        lastDate = completionDate;
+        completing = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => completing = false);
+      await _showError('Could not save today’s completion. Please try again.');
+    }
   }
 
   Future<void> _editQuestion() async {
     final textController = TextEditingController(text: question);
+    var savingQuestion = false;
+    String? editError;
     await showCupertinoModalPopup(
       context: context,
-      builder: (_) => CupertinoActionSheet(
-        title: const Text('Edit Question'),
-        message: CupertinoTextField(
-          controller: textController,
-          padding: const EdgeInsets.all(12),
-        ),
-        actions: [
-          CupertinoActionSheetAction(
-            onPressed: () async {
-              question = textController.text.trim().isEmpty
-                  ? question
-                  : textController.text.trim();
-              await _save();
-              if (mounted) {
-                Navigator.pop(context);
-                setState(() {});
-              }
-            },
-            child: const Text('Save'),
-          ),
-        ],
-        cancelButton: CupertinoActionSheetAction(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
-        ),
+      builder: (_) => StatefulBuilder(
+        builder: (context, setSheetState) {
+          Future<void> submitQuestion() async {
+            final nextQuestion = textController.text.trim();
+            if (nextQuestion.isEmpty) {
+              setSheetState(() {
+                editError = 'Enter a question to save.';
+              });
+              return;
+            }
+            setSheetState(() {
+              savingQuestion = true;
+              editError = null;
+            });
+            try {
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.setString('question', nextQuestion);
+              if (!mounted || !context.mounted) return;
+              setState(() => question = nextQuestion);
+              Navigator.pop(context);
+            } catch (_) {
+              setSheetState(() {
+                savingQuestion = false;
+                editError = 'Could not save your question. Please try again.';
+              });
+            }
+          }
+
+          return CupertinoActionSheet(
+            title: const Text('Edit Question'),
+            message: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CupertinoTextField(
+                  controller: textController,
+                  padding: const EdgeInsets.all(12),
+                  enabled: !savingQuestion,
+                ),
+                if (editError != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    editError!,
+                    style: const TextStyle(color: CupertinoColors.systemRed),
+                  ),
+                ],
+              ],
+            ),
+            actions: [
+              CupertinoActionSheetAction(
+                onPressed: () {
+                  if (!savingQuestion) submitQuestion();
+                },
+                child: savingQuestion
+                    ? const CupertinoActivityIndicator()
+                    : const Text('Save'),
+              ),
+            ],
+            cancelButton: CupertinoActionSheetAction(
+              onPressed: () {
+                if (!savingQuestion) Navigator.pop(context);
+              },
+              child: const Text('Cancel'),
+            ),
+          );
+        },
       ),
     );
     textController.dispose();
@@ -251,19 +375,65 @@ class _HabitScreenState extends State<HabitScreen>
     );
     if (shouldReset != true) return;
 
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.clear();
-    if (mounted) {
-      Navigator.of(context).pushAndRemoveUntil(
-        CupertinoPageRoute(builder: (_) => const RootScreen()),
-        (route) => false,
-      );
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.clear();
+      if (mounted) {
+        Navigator.of(context).pushAndRemoveUntil(
+          CupertinoPageRoute(builder: (_) => const RootScreen()),
+          (route) => false,
+        );
+      }
+    } catch (_) {
+      await _showError('Could not reset Sloth. Your saved data is unchanged.');
     }
+  }
+
+  Future<void> _showError(String message) async {
+    if (!mounted) return;
+    await showCupertinoDialog<void>(
+      context: context,
+      builder: (context) => CupertinoAlertDialog(
+        title: const Text('Something went wrong'),
+        content: Text(message),
+        actions: [
+          CupertinoDialogAction(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final ringColor = completed ? completedColor : defaultColor;
+
+    if (loading) {
+      return const CupertinoPageScaffold(
+        child: Center(child: CupertinoActivityIndicator()),
+      );
+    }
+    if (loadError case final error?) {
+      return CupertinoPageScaffold(
+        child: SafeArea(
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(error, textAlign: TextAlign.center),
+                const SizedBox(height: 16),
+                CupertinoButton.filled(
+                  onPressed: _load,
+                  child: const Text('Try again'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
 
     return CupertinoPageScaffold(
       child: SafeArea(
@@ -288,84 +458,119 @@ class _HabitScreenState extends State<HabitScreen>
               ),
             ),
             Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  ScaleTransition(
-                    scale: CurvedAnimation(
-                      parent: controller,
-                      curve: Curves.easeOutBack,
-                    ),
-                    child: Semantics(
-                      button: true,
-                      label: completed
-                          ? 'Habit completed today'
-                          : 'Complete habit',
-                      child: GestureDetector(
-                        onTap: _markCompleted,
-                        child: SizedBox(
-                          width: 290,
-                          height: 290,
-                          child: Stack(
-                            alignment: Alignment.center,
-                            children: [
-                              CustomPaint(
-                                size: const Size(290, 290),
-                                painter: RingPainter(color: ringColor),
-                              ),
-                              Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 55,
-                                ),
-                                child: Text(
-                                  question,
-                                  textAlign: TextAlign.center,
-                                  style: const TextStyle(
-                                    fontSize: 24,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                              ),
-                              if (completed)
-                                Positioned(
-                                  bottom: 28,
-                                  child: Container(
-                                    width: 52,
-                                    height: 52,
-                                    decoration: BoxDecoration(
-                                      color: completedColor,
-                                      shape: BoxShape.circle,
-                                      border: Border.all(
-                                        color: CupertinoColors.white,
-                                        width: 4,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final ringSize = math.min(
+                    290.0,
+                    math.max(160.0, constraints.maxHeight - 135),
+                  );
+                  final ringGap = ringSize >= 280
+                      ? 60.0
+                      : math.max(
+                          16.0,
+                          math.min(
+                              36.0, constraints.maxHeight - ringSize - 100),
+                        );
+                  return SingleChildScrollView(
+                    child: ConstrainedBox(
+                      constraints:
+                          BoxConstraints(minHeight: constraints.maxHeight),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          ScaleTransition(
+                            scale: CurvedAnimation(
+                              parent: controller,
+                              curve: Curves.easeOutBack,
+                            ),
+                            child: Semantics(
+                              button: true,
+                              enabled: !completed && !completing,
+                              label: completed
+                                  ? 'Habit completed today'
+                                  : completing
+                                      ? 'Saving habit completion'
+                                      : 'Complete habit',
+                              child: GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onTap: completed || completing
+                                    ? null
+                                    : _markCompleted,
+                                child: SizedBox(
+                                  width: ringSize,
+                                  height: ringSize,
+                                  child: Stack(
+                                    alignment: Alignment.center,
+                                    children: [
+                                      CustomPaint(
+                                        size: Size(ringSize, ringSize),
+                                        painter: RingPainter(color: ringColor),
                                       ),
-                                    ),
-                                    child: const Icon(
-                                      CupertinoIcons.check_mark,
-                                      color: CupertinoColors.white,
-                                    ),
+                                      Padding(
+                                        padding: EdgeInsets.symmetric(
+                                          horizontal: ringSize * 0.19,
+                                        ),
+                                        child: Text(
+                                          question,
+                                          textAlign: TextAlign.center,
+                                          style: TextStyle(
+                                            fontSize: math.max(
+                                              16.0,
+                                              math.min(24.0, ringSize * 0.082),
+                                            ),
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                      ),
+                                      if (completed)
+                                        Positioned(
+                                          bottom: ringSize * 0.1,
+                                          child: Container(
+                                            width: ringSize * 0.18,
+                                            height: ringSize * 0.18,
+                                            decoration: BoxDecoration(
+                                              color: completedColor,
+                                              shape: BoxShape.circle,
+                                              border: Border.all(
+                                                color: CupertinoColors.white,
+                                                width: 4,
+                                              ),
+                                            ),
+                                            child: Icon(
+                                              CupertinoIcons.check_mark,
+                                              color: CupertinoColors.white,
+                                              size: ringSize * 0.09,
+                                            ),
+                                          ),
+                                        ),
+                                    ],
                                   ),
                                 ),
-                            ],
+                              ),
+                            ),
                           ),
-                        ),
+                          SizedBox(height: ringGap),
+                          Text(
+                            '$streak',
+                            style: TextStyle(
+                              fontSize: math.min(56.0, ringSize * 0.193),
+                              fontWeight: FontWeight.bold,
+                              color: completed
+                                  ? completedColor
+                                  : CupertinoColors.black,
+                            ),
+                          ),
+                          Text(
+                            'day streak',
+                            style: TextStyle(
+                              fontSize: math.min(24.0, ringSize * 0.083),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 60),
-                  Text(
-                    '$streak',
-                    style: TextStyle(
-                      fontSize: 56,
-                      fontWeight: FontWeight.bold,
-                      color: completed ? completedColor : CupertinoColors.black,
-                    ),
-                  ),
-                  const Text(
-                    'day streak',
-                    style: TextStyle(fontSize: 24),
-                  ),
-                ],
+                  );
+                },
               ),
             ),
           ],

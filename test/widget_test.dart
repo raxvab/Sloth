@@ -39,6 +39,25 @@ void main() {
     tester.view.resetViewInsets();
   });
 
+  testWidgets('habit screen fits a compact Android viewport without overflow',
+      (tester) async {
+    tester.view.physicalSize = const Size(360, 420);
+    tester.view.devicePixelRatio = 1;
+    SharedPreferences.setMockInitialValues({
+      'onboarded': true,
+      'question': 'Did I walk today?',
+    });
+    await tester.pumpWidget(const SlothApp());
+    await tester.pumpAndSettle();
+
+    expect(find.text('Did I walk today?'), findsOneWidget);
+    expect(find.text('day streak'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    tester.view.resetPhysicalSize();
+    tester.view.resetDevicePixelRatio();
+  });
+
   testWidgets('completing the habit turns the ring green and increments streak',
       (tester) async {
     SharedPreferences.setMockInitialValues({
@@ -56,6 +75,22 @@ void main() {
     final prefs = await SharedPreferences.getInstance();
     expect(prefs.getInt('streak'), 1);
     expect(prefs.getString('lastCompletedDate'), isNotEmpty);
+  });
+
+  testWidgets('rapid repeated taps only record one completion', (tester) async {
+    SharedPreferences.setMockInitialValues({
+      'onboarded': true,
+      'question': 'Did I walk today?',
+    });
+    await tester.pumpWidget(const SlothApp());
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Did I walk today?'));
+    await tester.tap(find.text('Did I walk today?'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('1'), findsOneWidget);
+    expect((await SharedPreferences.getInstance()).getInt('streak'), 1);
   });
 
   testWidgets('the question can be edited and saved', (tester) async {
@@ -93,6 +128,25 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Did I walk today?'), findsOneWidget);
+    expect((await SharedPreferences.getInstance()).getString('question'),
+        'Did I walk today?');
+  });
+
+  testWidgets('editing rejects an empty question without losing the old one',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({
+      'onboarded': true,
+      'question': 'Did I walk today?',
+    });
+    await tester.pumpWidget(const SlothApp());
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(CupertinoIcons.back));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(CupertinoTextField), '');
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Enter a question to save.'), findsOneWidget);
     expect((await SharedPreferences.getInstance()).getString('question'),
         'Did I walk today?');
   });

@@ -25,6 +25,7 @@ Figma Make link referenced in the shared conversation: [Design premium mobile ap
 
 - One daily habit question, initially “Did I walk today?”
 - Persistent onboarding state, question, streak count, and last completion date using `shared_preferences`.
+- Loading indicators and retry UI for saved-state reads; save/reset failures leave the UI honest and show an error instead of claiming success.
 - Daily completion state restored when the app starts again.
 - Haptic feedback and spring-style ring completion animation.
 - Streak increments only for consecutive calendar days, does not increment twice on one day, and restarts at one after a missed day.
@@ -40,7 +41,7 @@ flutter test
 flutter analyze
 ```
 
-**Result: 10 tests passed; static analysis reported no issues.**
+**Result: 13 tests passed; static analysis reported no issues.** The suite includes 3 unit tests and 10 widget tests.
 
 | Test | Result |
 | --- | --- |
@@ -49,9 +50,12 @@ flutter analyze
 | Same-day completion does not increment twice | PASS |
 | Onboarding saves the chosen question and opens home | PASS |
 | Onboarding remains usable with a reduced keyboard viewport | PASS |
+| Habit home fits a compact Android viewport without overflow | PASS |
 | Completing the habit shows completion state and persists streak/date | PASS |
+| Rapid repeated taps record one completion | PASS |
 | Editing the question saves the change | PASS |
 | Canceling edit preserves the existing question | PASS |
+| Empty edit input is rejected and preserves the saved question | PASS |
 | Question and completion restore after an app restart | PASS |
 | Reset confirmation clears local data and returns to onboarding | PASS |
 
@@ -69,9 +73,9 @@ All three builds completed with Flutter 3.47.9 / Dart 3.13.7. APK signatures ver
 
 | Artifact | Size | SHA-256 |
 | --- | ---: | --- |
-| `sloth-v1-debug.apk` | 160,729,887 bytes | `af970cf5dd805d1526c53e50e776055a36fff57b9aceec71d42a6afa50140729` |
-| `sloth-v1-release.apk` | 47,606,420 bytes | `961091848bb764a5d63be4b426694520d0431646025198e307545dc164dea4c1` |
-| `sloth-v1-release.aab` | 47,552,118 bytes | `28edd10599f7f3e180a56d85ca2a9142062283b0eb5a6c2000b61c23d30f16a3` |
+| `sloth-v1-debug.apk` | 160,735,697 bytes | `1ed90e3f42149121208ceac51b82a4b828252b5d5efe7055b48d1c89a8085ef4` |
+| `sloth-v1-release.apk` | 47,606,420 bytes | `0701a9d4d4483adc06a510745f6d0bce8f5b2b7d735a50bbb54d3f9b641e3702` |
+| `sloth-v1-release.aab` | 47,594,930 bytes | `63de46962288eb6ff45b04eef9896f1ee669816b20cf36b1459175f0b169c436` |
 
 The local release APK and AAB use the debug signing key, as requested for local testing. They are not signed with a production Google Play upload key. Follow the README signing instructions before publishing.
 
@@ -95,3 +99,4 @@ Do not upload the current debug-signed AAB to a production track.
 - **Single habit only.** Multiple habits, schedules, reminders, analytics, and social sharing are outside the supplied V1 design/code.
 - **Visual comparison is limited** because the supplied ZIP has no Figma screenshots or image assets. The referenced Figma link is included above for manual review.
 - The launcher mark is a vector approximation because no Sloth logo file was supplied.
+- Storage-failure UI is implemented, but automated tests do not currently inject a failing `shared_preferences` platform call.
